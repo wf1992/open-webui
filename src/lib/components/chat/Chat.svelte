@@ -110,6 +110,9 @@
 	let params = {};
 	let valves = {};
 
+	let imgContext = '';
+
+
 	$: if (history.currentId !== null) {
 		let _messages = [];
 
@@ -194,7 +197,7 @@
 		const onMessageHandler = async (event) => {
 			if (event.origin === window.origin) {
 				// Replace with your iframe's origin
-				console.log('Message received from iframe:', event.data);
+				// console.log('Message received from iframe:', event.data);
 				if (event.data.type === 'input:prompt') {
 					console.log(event.data.text);
 
@@ -483,7 +486,7 @@
 
 	const submitPrompt = async (userPrompt, { _raw = false } = {}) => {
 		let _responses = [];
-		console.log('submitPrompt', $chatId);
+		console.log('submitPrompt11', $chatId);
 
 		selectedModels = selectedModels.map((modelId) =>
 			$models.map((m) => m.id).includes(modelId) ? modelId : ''
@@ -519,6 +522,9 @@
 				chatTextAreaElement.value = '';
 				chatTextAreaElement.style.height = '';
 			}
+			console.log('_files', files);
+			console.log('userPrompt', userPrompt);
+			let filesCopy = files;
 
 			const _files = JSON.parse(JSON.stringify(files));
 			chatFiles.push(..._files.filter((item) => ['doc', 'file', 'collection'].includes(item.type)));
@@ -527,7 +533,7 @@
 				(item, index, array) =>
 					array.findIndex((i) => JSON.stringify(i) === JSON.stringify(item)) === index
 			);
-
+			
 			files = [];
 
 			prompt = '';
@@ -556,13 +562,58 @@
 
 			// Wait until history/message have been updated
 			await tick();
-			_responses = await sendPrompt(userPrompt, userMessageId, { newChat: true });
-		}
+			if(filesCopy.length > 0) {
+				let type = filesCopy[0].type;
+				if(type == 'image') {
+					let picResult = {};
+					picResult = await sendImage(userPrompt,filesCopy[0].url);
+					// _responses = [picResult.answer];
+					imgContext = picResult.context;
+					_responses = await sendPrompt(userPrompt, userMessageId, { newChat: true ,filesResponse: picResult.answer });
+					// 
+				}else {
+					_responses = await sendPrompt(imgContext + userPrompt, userMessageId, { newChat: true });
+				}
+				
+			}else {
+				_responses = await sendPrompt(imgContext + userPrompt, userMessageId, { newChat: true });
+			}
+			console.log('_responses', _responses);
 
+		}
 		return _responses;
 	};
 
-	const sendPrompt = async (prompt, parentId, { modelId = null, newChat = false } = {}) => {
+	async function sendImage(text,base64) {  
+        try {  
+            const response = await fetch('http://127.0.0.1:5000/get-topK-image', {  
+                method: 'POST',  
+                headers: {  
+                    'Content-Type': 'application/json',  
+                },  
+                body: JSON.stringify({  
+                    query_base: base64,  
+					text: text,  
+                }),  
+            });  
+  
+            if (!response.ok) {  
+                throw new Error('Network response was not ok');  
+            }  
+  
+            const result = await response.json();  
+            console.log(result); // 处理后端返回的数据  
+			return result;
+            // 可以通过dispatch来通知父组件或更新UI  
+            // dispatch('imageSent', { success: true });  
+        } catch (error) {  
+            console.error('Error sending image:', error);  
+			return {'answer':'暂未识别出图片内容，请重新上传'};
+            // dispatch('imageSent', { success: false, error: error.message });  
+        }  
+    }  
+
+	const sendPrompt = async (prompt, parentId, { modelId = null, newChat = false,filesResponse = null } = {}) => {
 		let _responses = [];
 
 		// If modelId is provided, use it, else use selected model
@@ -677,20 +728,21 @@
 						}
 					}
 					responseMessage.userContext = userContext;
-
+					
 					const chatEventEmitter = await getChatEventEmitter(model.id, _chatId);
 					if (webSearchEnabled) {
 						await getWebSearchResults(model.id, parentId, responseMessageId);
 					}
-
 					let _response = null;
+
 					if (model?.owned_by === 'openai') {
 						_response = await sendPromptOpenAI(model, prompt, responseMessageId, _chatId);
 					} else if (model) {
-						_response = await sendPromptOllama(model, prompt, responseMessageId, _chatId);
+						_response = await sendPromptOllama(model, prompt, responseMessageId, _chatId,{filesResponse:filesResponse});
 					}
 					_responses.push(_response);
-
+					console.log('responseMessage~~~');
+					console.log(responseMessage);
 					if (chatEventEmitter) clearInterval(chatEventEmitter);
 				} else {
 					toast.error($i18n.t(`Model {{modelId}} not found`, { modelId }));
@@ -702,7 +754,7 @@
 		return _responses;
 	};
 
-	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId) => {
+	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId,{filesResponse = null }) => {
 		let _response = null;
 
 		const responseMessage = history.messages[responseMessageId];
@@ -834,7 +886,9 @@
 						const messages = createMessagesList(responseMessageId);
 						await chatCompletedHandler(_chatId, model.id, responseMessageId, messages);
 					}
-
+					if(filesResponse != null) {
+						responseMessage.content = filesResponse;
+					}
 					_response = responseMessage.content;
 					break;
 				}
@@ -860,7 +914,11 @@
 								if (responseMessage.content == '' && data.message.content == '\n') {
 									continue;
 								} else {
-									responseMessage.content += data.message.content;
+									if(filesResponse != null) {
+										responseMessage.content = filesResponse;
+									}else {
+										responseMessage.content += data.message.content;
+									}
 
 									const sentences = extractSentencesForAudio(responseMessage.content);
 									sentences.pop();
@@ -1139,7 +1197,9 @@
 
 							await chatCompletedHandler(_chatId, model.id, responseMessageId, messages);
 						}
-
+						if(filesResponse != null) {
+							responseMessage.content = filesResponse;
+						}
 						_response = responseMessage.content;
 
 						break;

@@ -167,6 +167,7 @@
 
 			if (res.text !== '') {
 				const _responses = await submitPrompt(res.text, { _raw: true });
+				console.log('calloverlay~~response');
 				console.log(_responses);
 			}
 		}
