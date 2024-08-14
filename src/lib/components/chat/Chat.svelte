@@ -233,11 +233,11 @@
 		$socket.on('chat-events', chatEventHandler);
 
 		if (!$chatId) {
-			chatId.subscribe(async (value) => {
-				if (!value) {
+			// chatId.subscribe(async (value) => {
+			// 	if (!value) {
 					await initNewChat();
-				}
-			});
+				// }
+			// });
 		} else {
 			if (!($settings.saveChatHistory ?? true)) {
 				await goto('/');
@@ -572,11 +572,22 @@
 					_responses = await sendPrompt(userPrompt, userMessageId, { newChat: true ,filesResponse: picResult.answer });
 					// 
 				}else {
+					
 					_responses = await sendPrompt(imgContext + userPrompt, userMessageId, { newChat: true });
 				}
 				
 			}else {
-				_responses = await sendPrompt(imgContext + userPrompt, userMessageId, { newChat: true });
+				if('融媒体中心的系统建设有哪些系统，能介绍一下嘛？'.includes(userPrompt)||'AI在体育领域的应用，有产品推荐吗？'.includes(userPrompt)||'InnoMotion产品能提供一份更详尽的配置清单吗？'.includes(userPrompt)||(userPrompt.includes('姓名')&&userPrompt.includes('手机号'))){
+					console.log('1111', userPrompt);
+					let textRes = await sendText(userPrompt);
+					console.log('2222', textRes);
+					_responses = await sendPrompt('请问你是什么名字呢', userMessageId, { newChat: true ,textResponse: textRes.answer });
+
+					// _responses = await sendPrompt(textRes, userMessageId, { newChat: true });
+
+				}else {
+					_responses = await sendPrompt(imgContext + userPrompt, userMessageId, { newChat: true });
+				}
 			}
 			console.log('_responses', _responses);
 
@@ -584,9 +595,37 @@
 		return _responses;
 	};
 
+	async function sendText(text) {  
+        try {  
+            const response = await fetch('http://10.31.17.203:5000/get-topK-answer', {  
+                method: 'POST',  
+                headers: {  
+                    'Content-Type': 'application/json',  
+                },  
+                body: JSON.stringify({  
+					text: text,  
+                }),  
+            });  
+  
+            if (!response.ok) {  
+                throw new Error('Network response was not ok');  
+            }  
+  
+            const result = await response.json();  
+            console.log(result); // 处理后端返回的数据  
+			return result;
+            // 可以通过dispatch来通知父组件或更新UI  
+            // dispatch('imageSent', { success: true });  
+        } catch (error) {  
+            console.error('Error sending image:', error);  
+			return {'text':'暂未识别出内容，请重新询问'};
+            // dispatch('imageSent', { success: false, error: error.message });  
+        }  
+    }  
+
 	async function sendImage(text,base64) {  
         try {  
-            const response = await fetch('http://127.0.0.1:5000/get-topK-image', {  
+            const response = await fetch('http://10.31.17.203:5000/get-topK-image', {  
                 method: 'POST',  
                 headers: {  
                     'Content-Type': 'application/json',  
@@ -613,7 +652,7 @@
         }  
     }  
 
-	const sendPrompt = async (prompt, parentId, { modelId = null, newChat = false,filesResponse = null } = {}) => {
+	const sendPrompt = async (prompt, parentId, { modelId = null, newChat = false,filesResponse = null,textResponse = null } = {}) => {
 		let _responses = [];
 
 		// If modelId is provided, use it, else use selected model
@@ -738,7 +777,7 @@
 					if (model?.owned_by === 'openai') {
 						_response = await sendPromptOpenAI(model, prompt, responseMessageId, _chatId);
 					} else if (model) {
-						_response = await sendPromptOllama(model, prompt, responseMessageId, _chatId,{filesResponse:filesResponse});
+						_response = await sendPromptOllama(model, prompt, responseMessageId, _chatId,{filesResponse:filesResponse,textResponse:textResponse});
 					}
 					_responses.push(_response);
 					console.log('responseMessage~~~');
@@ -754,7 +793,7 @@
 		return _responses;
 	};
 
-	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId,{filesResponse = null }) => {
+	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId,{filesResponse = null ,textResponse = null}) => {
 		let _response = null;
 
 		const responseMessage = history.messages[responseMessageId];
@@ -840,6 +879,20 @@
 
 		await tick();
 
+		let currentIndex = 0;
+		let textResList = [];
+		if(textResponse != null) {
+			for (let i = 0, len = textResponse.length; i < len; i += 20) {  
+				if(i==textResponse.length - 1){
+					textResList.push({"model":"qwen:0.5b","created_at":"2024-08-14T04:07:28.415226Z","message":{"role":"assistant","content":textResponse.substr(i, 20)},"done":true});  
+				}else {
+					textResList.push({"model":"qwen:0.5b","created_at":"2024-08-14T04:07:28.415226Z","message":{"role":"assistant","content":textResponse.substr(i, 20)},"done":false});  
+				}
+				console.log(textResponse.substr(i,20));
+			}  
+		}
+		console.log(textResList);
+
 		const [res, controller] = await generateChatCompletion(localStorage.token, {
 			stream: true,
 			model: model.id,
@@ -895,14 +948,37 @@
 
 				try {
 					let lines = value.split('\n');
+					if(textResponse != null) {
+						if(currentIndex == textResList.length ) {
+							responseMessage.done = true;
+							messages = messages;
 
+							if (stopResponseFlag) {
+								controller.abort('User: Stop Response');
+							} else {
+								const messages = createMessagesList(responseMessageId);
+								await chatCompletedHandler(_chatId, model.id, responseMessageId, messages);
+							}
+							if(filesResponse != null) {
+								responseMessage.content = filesResponse;
+							}
+							_response = responseMessage.content;
+							break;
+						} 
+						console.log('textResList[currentIndex]',textResList.length,currentIndex);
+						console.log(textResList[currentIndex]);
+
+						lines = [JSON.stringify(textResList[currentIndex])];  
+						currentIndex+=1;
+						
+					}
 					for (const line of lines) {
 						if (line !== '') {
 							console.log(line);
 							let data = JSON.parse(line);
 
 							if ('citations' in data) {
-								responseMessage.citations = data.citations;
+								responseMessage.citations = data.citations;	
 								continue;
 							}
 
@@ -914,9 +990,17 @@
 								if (responseMessage.content == '' && data.message.content == '\n') {
 									continue;
 								} else {
+									console.log('filesResponse',filesResponse);
 									if(filesResponse != null) {
 										responseMessage.content = filesResponse;
-									}else {
+									}else if(filesResponse == null&& textResponse == null){
+										responseMessage.content = filesResponse;
+									}
+									if(textResponse != null && filesResponse == null) {
+										console.log('jinl;ai');
+										responseMessage.content += data.message.content;
+									}else if(filesResponse == null&& textResponse == null){
+										console.log('jinl;ai111111');
 										responseMessage.content += data.message.content;
 									}
 
